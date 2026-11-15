@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Host Defense — Microbiology RPG</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦠</text></svg>">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">
+        <h1>Host Defense</h1>
+        <span class="subtitle">a microbiology &amp; immunology RPG</span>
+      </div>
+      <div class="vitals" id="vitals"></div>
+      <div class="resources" id="resources"></div>
+    </header>
+
+    <main>
+      <section class="battle-wrap">
+        <div class="battle-head">
+          <span id="waveLabel" class="wave-label">No invasion yet</span>
+          <span class="spacer"></span>
+          <button type="button" class="small" id="pauseBtn">⏸ Pause</button>
+          <button type="button" class="small" id="speedBtn">1×</button>
+          <button type="button" class="small" id="glossaryBtn">Glossary</button>
+        </div>
+        <div class="battlefield" id="battlefield"></div>
+        <div class="tray" id="tray"></div>
+        <div class="abilities">
+          <button type="button" class="small" id="dnaseBtn" title="Strip biofilm from every invader on the field (50 ATP)">🧬 DNase burst — 50 ATP</button>
+          <span class="hint">Click a cell, then click a grid square to deploy. Click a deployed cell to remove it.</span>
+        </div>
+      </section>
+
+      <aside class="side">
+        <div class="panel">
+          <h2>Event log</h2>
+          <div class="log" id="log"></div>
+        </div>
+        <div class="panel">
+          <h2>How it works</h2>
+          <ul class="howto">
+            <li>Invaders advance from the right. Stop them before they reach the core — a breach costs host integrity.</li>
+            <li>Deploy cells with ATP. Kills earn ATP; macrophages yield antigen.</li>
+            <li>Dendritic cells present antigen so B cells can make antibodies (opsonization).</li>
+            <li>Each pathogen has a real virulence factor. Read its briefing card — the counter is in there.</li>
+            <li>Beat a pathogen once and memory cells make the next encounter easier.</li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+
+    <footer>
+      Educational game. Pathogen facts are drawn from standard medical microbiology;
+      mechanics are simplified for play. Not a clinical reference.
+    </footer>
+  </div>
+
+  <dialog id="briefingDialog" class="modal" aria-labelledby="briefingTitle">
+    <div class="dialog-head"><h3 id="briefingTitle">Briefing</h3></div>
+    <div class="dialog-body" id="briefingBody"></div>
+    <div class="dialog-foot"><button type="button" class="primary" id="startWaveBtn">Start wave</button></div>
+  </dialog>
+
+  <dialog id="shopDialog" class="modal" aria-labelledby="shopTitle">
+    <div class="dialog-head"><h3 id="shopTitle">Between waves — research &amp; training</h3></div>
+    <div class="dialog-body" id="shopBody"></div>
+    <div class="dialog-foot"><button type="button" class="primary" id="nextWaveBtn">Next wave</button></div>
+  </dialog>
+
+  <dialog id="glossaryDialog" class="modal" aria-labelledby="glossaryTitle">
+    <div class="dialog-head">
+      <h3 id="glossaryTitle">Glossary</h3>
+      <button type="button" class="small ghost" id="glossaryClose" aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body" id="glossaryBody"></div>
+  </dialog>
+
+  <dialog id="endDialog" class="modal" aria-labelledby="endTitle">
+    <div class="dialog-head"><h3 id="endTitle">Game over</h3></div>
+    <div class="dialog-body" id="endBody"></div>
+    <div class="dialog-foot"><button type="button" class="primary" id="restartBtn">Play again</button></div>
+  </dialog>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
