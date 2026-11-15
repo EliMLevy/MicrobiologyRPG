@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="title">
         <h1>Host Defense</h1>
-        <span class="subtitle">a microbiology &amp; immunology RPG</span>
+        <span class="subtitle">a microbiology &amp; immunology tower defense</span>
       </div>
       <div class="vitals" id="vitals"></div>
       <div class="resources" id="resources"></div>
@@ -27,12 +27,13 @@
           <button type="button" class="small" id="speedBtn">1×</button>
           <button type="button" class="small" id="glossaryBtn">Glossary</button>
         </div>
-        <div class="battlefield" id="battlefield"></div>
+        <canvas id="game" width="960" height="540"></canvas>
         <div class="tray" id="tray"></div>
         <div class="abilities">
           <button type="button" class="small" id="dnaseBtn" title="Strip biofilm from every invader on the field (50 ATP)">🧬 DNase burst — 50 ATP</button>
-          <span class="hint">Click a cell, then click a grid square to deploy. Click a deployed cell to remove it.</span>
+          <span class="hint">Pick a defender, then click the tissue to place it (Shift-click to place several). Skin barriers go on the path. Click a placed defender to inspect it.</span>
         </div>
+        <div id="towerInfo"></div>
       </section>
 
       <aside class="side">
@@ -43,8 +44,9 @@
         <div class="panel">
           <h2>How it works</h2>
           <ul class="howto">
-            <li>Invaders advance from the right. Stop them before they reach the core — a breach costs host integrity.</li>
-            <li>Deploy cells with ATP. Kills earn ATP; macrophages yield antigen.</li>
+            <li>Invaders follow the path to the heart. Stop them before they get there — a breach costs host integrity.</li>
+            <li>Place defenders in the tissue beside the path. Skin barriers go <i>on</i> the path; bone marrow centers release roaming white blood cells.</li>
+            <li>Kills earn ATP; macrophages yield antigen for research between waves.</li>
             <li>Dendritic cells present antigen so B cells can make antibodies (opsonization).</li>
             <li>Each pathogen has a real virulence factor. Read its briefing card — the counter is in there.</li>
             <li>Beat a pathogen once and memory cells make the next encounter easier.</li>

@@ -1,17 +1,23 @@
-// MicrobiologyRPG UI: rendering, placement, shop, briefing, glossary.
-import { CELLS, PATHOGENS, WAVES, UPGRADES, GLOSSARY, LANES, COLS } from "./data.js";
+// MicrobiologyRPG v2 UI: canvas rendering, free placement, HUD, modals.
+import { TOWERS, PATHOGENS, WAVES, UPGRADES, GLOSSARY, W, H } from "./data.js";
 import {
-  createGame, startWave, startEndless, tick, placeCell, removeCell,
-  dnaseBurst, buyUpgrade, upgradeLevel, wavePathogen, log,
+  createGame, startWave, startEndless, step, placeTower, removeTower, towerAt,
+  canPlace, dnaseBurst, buyUpgrade, upgradeLevel, wavePathogen, enemyPos, log,
 } from "./game.js";
+import {
+  drawField, drawPath, drawHeart, drawEnemy, drawRange, drawPlacementGhost,
+  drawNeutrophil, drawMacrophage, drawDendritic, drawBCell, drawCD8, drawNK,
+  drawSkinBarrier, drawMarrow,
+} from "./art.js";
 
 const els = {
   vitals: document.getElementById("vitals"),
   resources: document.getElementById("resources"),
   waveLabel: document.getElementById("waveLabel"),
-  battlefield: document.getElementById("battlefield"),
+  canvas: document.getElementById("game"),
   tray: document.getElementById("tray"),
   log: document.getElementById("log"),
+  info: document.getElementById("towerInfo"),
   pauseBtn: document.getElementById("pauseBtn"),
   speedBtn: document.getElementById("speedBtn"),
   glossaryBtn: document.getElementById("glossaryBtn"),
@@ -32,22 +38,113 @@ const els = {
   restartBtn: document.getElementById("restartBtn"),
 };
 
+const ctx = els.canvas.getContext("2d");
 const state = createGame();
-let selectedCell = null;
-let removeMode = false;
-let loopId = null;
+let selectedTower = null; // tower type code to place
+let selectedPlaced = null; // placed tower id
+let mouse = { x: 0, y: 0, inside: false };
 let pendingWave = 1;
+let lastTs = 0;
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function num(n) { return Math.round(n).toLocaleString(); }
 
-/* ---------- rendering ---------- */
+/* ---------- canvas rendering ---------- */
 
-function renderVitals() {
-  const liveCells = state.cells.size;
-  const temp = (37.0 + 0.8 * upgradeLevel(state, "fever") + (state.phase === "battle" && state.invaders.length ? 0.4 : 0)).toFixed(1);
+const DRAW = {
+  neutrophil: drawNeutrophil,
+  macrophage: drawMacrophage,
+  dendritic: drawDendritic,
+  bcell: drawBCell,
+  cd8: drawCD8,
+  nk: drawNK,
+  skin: drawSkinBarrier,
+  marrow: drawMarrow,
+};
+
+function renderCanvas() {
+  const t = state.time;
+  drawField(ctx, t);
+  drawPath(ctx);
+  drawHeart(ctx, t, state.coreHp / state.maxCoreHp);
+
+  // Towers (skin zones under everything else).
+  for (const tw of state.towers) {
+    if (tw.code === "skin") {
+      drawSkinBarrier(ctx, tw.x, tw.y, TOWERS.skin.range, t, {
+        selected: selectedPlaced === tw.id,
+      });
+    }
+  }
+  for (const tw of state.towers) {
+    if (tw.code === "skin") continue;
+    const def = TOWERS[tw.code];
+    if (selectedPlaced === tw.id && def.range > 0) drawRange(ctx, tw.x, tw.y, def.range);
+    const opts = {
+      hp: def.hp > 0 ? tw.hp / tw.maxHp : null,
+      infected: !!tw.infected,
+      plasma: tw.plasma,
+      progress: tw.code === "marrow" ? Math.min(1, tw.marrowTimer / def.rate) : null,
+    };
+    DRAW[tw.code](ctx, tw.x, tw.y, def.radius, t, opts);
+    if (tw.infected) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("!", tw.x, tw.y - def.radius - 12);
+    }
+  }
+
+  // Roaming white blood cells.
+  for (const r of state.roamers) {
+    const def = TOWERS[r.code];
+    DRAW[r.code](ctx, r.x, r.y, def.radius * 0.8, t, {
+      hp: r.hp / r.maxHp, infected: !!r.infected,
+    });
+  }
+
+  // Enemies.
+  for (const e of state.enemies) {
+    const p = enemyPos(e);
+    drawEnemy(ctx, e, p.x, p.y, t);
+  }
+
+  // Tracers (shots) and death particles.
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.lineWidth = 1.5;
+  for (const tr of state.tracers) {
+    ctx.globalAlpha = Math.max(0, tr.life / 0.12);
+    ctx.beginPath();
+    ctx.moveTo(tr.x1, tr.y1);
+    ctx.lineTo(tr.x2, tr.y2);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  for (const pt of state.particles) {
+    ctx.globalAlpha = Math.max(0, pt.life / 0.4);
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 6 * (1 - pt.life / 0.4) + 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Placement ghost.
+  if (selectedTower && mouse.inside) {
+    const def = TOWERS[selectedTower];
+    const err = canPlace(state, selectedTower, mouse.x, mouse.y);
+    if (def.range > 0) drawRange(ctx, mouse.x, mouse.y, def.range);
+    drawPlacementGhost(ctx, selectedTower, mouse.x, mouse.y, !err);
+  }
+}
+
+/* ---------- HUD ---------- */
+
+function renderHUD() {
+  const liveCells = state.towers.length + state.roamers.length;
+  const temp = (37.0 + 0.8 * upgradeLevel(state, "fever") + (state.phase === "battle" && state.enemies.length ? 0.4 : 0)).toFixed(1);
   els.vitals.innerHTML =
     `<span class="vit" title="Host integrity — reaches 0 and the host goes septic">❤ <b>${num(state.coreHp)}</b>/100</span>` +
     `<span class="vit" title="Core temperature">🌡 ${temp}°C</span>` +
@@ -57,48 +154,10 @@ function renderVitals() {
     `<span class="vit" title="ATP — energy for deploying cells and abilities">⚡ ATP <b>${num(state.atp)}</b></span>` +
     `<span class="vit" title="Antigen samples — research currency">🧬 Antigen <b>${num(state.antigen)}</b></span>` +
     `<span class="vit">Wave <b>${state.wave || "—"}</b> / ${WAVES.length}</span>`;
-}
-
-function hpBar(hp, maxHp) {
-  const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
-  return `<div class="hpbar"><i style="width:${pct.toFixed(0)}%"></i></div>`;
-}
-
-function renderBattlefield() {
-  let html = "";
-  for (let lane = 0; lane < LANES; lane++) {
-    html += `<div class="lane" data-lane="${lane}">`;
-    html += `<div class="core" title="Host core — do not let invaders reach it">🫀</div>`;
-    for (let col = 0; col < COLS; col++) {
-      const cell = state.cells.get(`${lane},${col}`);
-      const invs = state.invaders.filter((i) => i.lane === lane && Math.floor(i.col) === col);
-      let inner = "";
-      if (cell) {
-        const def = CELLS[cell.code];
-        const infected = cell.infected ? ` infected` : "";
-        const plasma = cell.plasma ? ` plasma` : "";
-        inner += `<div class="unit cell${infected}${plasma}" style="--c:${def.color}" title="${esc(def.name)}${cell.infected ? " — INFECTED" : ""}${cell.plasma ? " — plasma cell" : ""}">` +
-          `<span class="abbr">${def.abbr}</span>${hpBar(cell.hp, cell.maxHp)}</div>`;
-      }
-      for (const inv of invs) {
-        const p = PATHOGENS[inv.code];
-        const flags = [
-          inv.biofilm ? "biofilm" : "",
-          inv.shield > 0 ? `shield +${num(inv.shield)}` : "",
-          inv.drifted ? "drifted" : "",
-        ].filter(Boolean).join(" · ");
-        inner += `<div class="unit inv" style="--c:${p.color}" title="${esc(p.name)}${flags ? " — " + esc(flags) : ""}">` +
-          `<span class="abbr">${p.abbr}</span>${hpBar(inv.hp + inv.shield, inv.maxHp)}</div>`;
-      }
-      html += `<div class="slot" data-lane="${lane}" data-col="${col}">${inner}</div>`;
-    }
-    html += `</div>`;
-  }
-  els.battlefield.innerHTML = html;
   const p = state.phase === "battle" ? wavePathogen(state) : null;
   els.waveLabel.textContent =
     state.phase === "battle"
-      ? `Wave ${state.wave}: ${p.name} — ${state.spawnQueue.length + state.invaders.length} remaining`
+      ? `Wave ${state.wave}: ${p.name} — ${state.spawnQueue.length + state.enemies.length} remaining`
       : state.phase === "shop"
         ? `Wave ${state.wave} cleared — research, then continue`
         : state.phase === "won"
@@ -106,44 +165,53 @@ function renderBattlefield() {
           : state.phase === "lost"
             ? "Sepsis — the host did not survive."
             : "No invasion yet — read the briefing and start wave 1.";
+  els.log.innerHTML = state.log.slice(0, 12).map((m) => `<div class="log-line">${esc(m)}</div>`).join("") ||
+    `<div class="log-line">No events yet.</div>`;
+  els.pauseBtn.textContent = state.paused ? "▶ Resume" : "⏸ Pause";
+  els.speedBtn.textContent = `${state.speed}×`;
+  els.dnaseBtn.disabled = state.phase !== "battle" || state.atp < 50;
+
+  // Selected tower info.
+  if (selectedPlaced != null) {
+    const tw = state.towers.find((x) => x.id === selectedPlaced);
+    if (!tw) {
+      selectedPlaced = null;
+      els.info.innerHTML = "";
+    } else {
+      const def = TOWERS[tw.code];
+      els.info.innerHTML =
+        `<div class="tower-info"><b>${esc(def.name)}</b> ` +
+        (def.hp > 0 ? `<span class="mono">HP ${Math.ceil(tw.hp)}/${def.maxHp}</span>` : "") +
+        (tw.infected ? ` <span class="tag tag-bad">INFECTED — bursts soon</span>` : "") +
+        (tw.plasma ? ` <span class="tag tag-ok">plasma cell</span>` : "") +
+        `<div class="upg-desc">${esc(def.desc)}</div>` +
+        `<button type="button" class="small" id="removeTowerBtn">Remove</button></div>`;
+      const rb = document.getElementById("removeTowerBtn");
+      if (rb) rb.addEventListener("click", () => {
+        removeTower(state, selectedPlaced);
+        selectedPlaced = null;
+        els.info.innerHTML = "";
+      });
+    }
+  } else {
+    els.info.innerHTML = "";
+  }
 }
 
 function renderTray() {
-  els.tray.innerHTML = Object.values(CELLS)
+  els.tray.innerHTML = Object.values(TOWERS)
     .map((c, i) => {
       const afford = state.atp >= c.cost;
-      const sel = selectedCell === c.code ? " selected" : "";
+      const sel = selectedTower === c.code ? " selected" : "";
       return `<button type="button" class="tray-btn${sel}${afford ? "" : " poor"}" data-code="${c.code}" title="${esc(c.desc)}">` +
         `<span class="tray-abbr" style="--c:${c.color}">${c.abbr}</span>` +
         `<span class="tray-name">${esc(c.name)}</span>` +
         `<span class="mono tray-cost">${c.cost} ATP · ${i + 1}</span></button>`;
     })
-    .join("") +
-    `<button type="button" class="tray-btn${removeMode ? " selected" : ""}" id="removeBtn" title="Remove a deployed cell">✕ Remove</button>`;
-  const rb = document.getElementById("removeBtn");
-  if (rb) rb.addEventListener("click", () => {
-    removeMode = !removeMode;
-    selectedCell = null;
-    renderTray();
-  });
+    .join("");
 }
 
-function renderLog() {
-  els.log.innerHTML = state.log.slice(0, 12).map((m) => `<div class="log-line">${esc(m)}</div>`).join("") ||
-    `<div class="log-line">No events yet.</div>`;
-}
-
-function render() {
-  renderVitals();
-  renderBattlefield();
-  renderTray();
-  renderLog();
-  els.pauseBtn.textContent = state.paused ? "▶ Resume" : "⏸ Pause";
-  els.speedBtn.textContent = `${state.speed}×`;
-  els.dnaseBtn.disabled = state.phase !== "battle" || state.atp < 50;
-}
-
-/* ---------- briefing / shop / end ---------- */
+/* ---------- modals ---------- */
 
 function openBriefing(n) {
   pendingWave = n;
@@ -200,78 +268,75 @@ function openEnd(won) {
     els.endDialog.close();
     startEndless(state);
     openShop();
-    render();
   });
   if (typeof els.endDialog.showModal === "function") els.endDialog.showModal();
 }
 
-/* ---------- loop ---------- */
+/* ---------- main loop ---------- */
 
-function startLoop() {
-  stopLoop();
-  loopId = setInterval(() => {
-    const prevPhase = state.phase;
-    tick(state);
-    if (state.phase !== prevPhase) {
-      if (state.phase === "shop") openShop();
-      if (state.phase === "won" || state.phase === "lost") openEnd(state.phase === "won");
-    }
-    render();
-  }, 700 / state.speed);
-}
-function stopLoop() {
-  if (loopId) clearInterval(loopId);
-  loopId = null;
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - lastTs) / 1000 || 0);
+  lastTs = ts;
+  const prevPhase = state.phase;
+  if (state.phase === "battle" && !state.paused) {
+    step(state, dt * state.speed);
+  }
+  if (state.phase !== prevPhase) {
+    if (state.phase === "shop") openShop();
+    if (state.phase === "won" || state.phase === "lost") openEnd(state.phase === "won");
+  }
+  renderCanvas();
+  renderHUD();
+  requestAnimationFrame(frame);
 }
 
-/* ---------- wiring ---------- */
+/* ---------- input ---------- */
+
+function canvasPos(e) {
+  const rect = els.canvas.getBoundingClientRect();
+  return {
+    x: ((e.clientX - rect.left) / rect.width) * W,
+    y: ((e.clientY - rect.top) / rect.height) * H,
+  };
+}
+
+els.canvas.addEventListener("mousemove", (e) => {
+  const p = canvasPos(e);
+  mouse = { x: p.x, y: p.y, inside: true };
+});
+els.canvas.addEventListener("mouseleave", () => { mouse.inside = false; });
+els.canvas.addEventListener("click", (e) => {
+  const p = canvasPos(e);
+  if (selectedTower) {
+    const err = placeTower(state, selectedTower, p.x, p.y);
+    if (err) log(state, err);
+    else if (!e.shiftKey) selectedTower = null;
+    renderTray();
+    return;
+  }
+  const tw = towerAt(state, p.x, p.y);
+  selectedPlaced = tw ? tw.id : null;
+});
 
 els.tray.addEventListener("click", (e) => {
   const btn = e.target.closest(".tray-btn[data-code]");
   if (!btn) return;
-  selectedCell = selectedCell === btn.dataset.code ? null : btn.dataset.code;
-  removeMode = false;
+  selectedTower = selectedTower === btn.dataset.code ? null : btn.dataset.code;
+  selectedPlaced = null;
   renderTray();
-});
-
-els.battlefield.addEventListener("click", (e) => {
-  const slot = e.target.closest(".slot");
-  if (!slot) return;
-  const lane = Number(slot.dataset.lane);
-  const col = Number(slot.dataset.col);
-  if (removeMode) {
-    removeCell(state, lane, col);
-    render();
-    return;
-  }
-  if (!selectedCell) return;
-  const err = placeCell(state, lane, col, selectedCell);
-  if (err) log(state, err);
-  render();
 });
 
 els.dnaseBtn.addEventListener("click", () => {
   const err = dnaseBurst(state);
   if (err) log(state, err);
-  render();
 });
 
-els.pauseBtn.addEventListener("click", () => {
-  state.paused = !state.paused;
-  render();
-});
-
-els.speedBtn.addEventListener("click", () => {
-  state.speed = state.speed === 1 ? 2 : 1;
-  startLoop();
-  render();
-});
+els.pauseBtn.addEventListener("click", () => { state.paused = !state.paused; });
+els.speedBtn.addEventListener("click", () => { state.speed = state.speed === 1 ? 2 : 1; });
 
 els.startWaveBtn.addEventListener("click", () => {
   els.briefingDialog.close();
   startWave(state, pendingWave);
-  startLoop();
-  render();
 });
 
 els.nextWaveBtn.addEventListener("click", () => {
@@ -279,12 +344,10 @@ els.nextWaveBtn.addEventListener("click", () => {
   if (!state.endless && state.wave >= WAVES.length) {
     state.phase = "won";
     openEnd(true);
-    render();
     return;
   }
   if (state.endless) state.endlessCycle++;
   openBriefing(state.wave + 1);
-  render();
 });
 
 els.shopBody.addEventListener("click", (e) => {
@@ -293,7 +356,6 @@ els.shopBody.addEventListener("click", (e) => {
   const err = buyUpgrade(state, btn.dataset.upg);
   if (err) log(state, err);
   openShop();
-  render();
 });
 
 els.glossaryBtn.addEventListener("click", () => {
@@ -303,30 +365,31 @@ els.glossaryBtn.addEventListener("click", () => {
   if (typeof els.glossaryDialog.showModal === "function") els.glossaryDialog.showModal();
 });
 els.glossaryClose.addEventListener("click", () => els.glossaryDialog.close());
-
-els.restartBtn.addEventListener("click", () => {
-  els.endDialog.close();
-  location.reload();
-});
+els.restartBtn.addEventListener("click", () => location.reload());
 
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, textarea")) return;
-  const codes = Object.keys(CELLS);
+  const codes = Object.keys(TOWERS);
   const idx = Number(e.key) - 1;
   if (idx >= 0 && idx < codes.length) {
-    selectedCell = selectedCell === codes[idx] ? null : codes[idx];
-    removeMode = false;
+    selectedTower = selectedTower === codes[idx] ? null : codes[idx];
+    selectedPlaced = null;
     renderTray();
   }
   if (e.key === " ") {
     e.preventDefault();
     state.paused = !state.paused;
-    render();
+  }
+  if (e.key === "Escape") {
+    selectedTower = null;
+    selectedPlaced = null;
+    renderTray();
   }
 });
 
 /* ---------- boot ---------- */
 
-log(state, "Welcome. You are the immune system. Read the briefing, then deploy.");
-render();
+log(state, "Welcome. You are the immune system. Read the briefing, then place your defenses.");
+renderTray();
+requestAnimationFrame(frame);
 openBriefing(1);
